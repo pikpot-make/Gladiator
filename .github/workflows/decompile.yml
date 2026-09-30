@@ -6,6 +6,7 @@ on:
       - "original.apk"
       - "parts/**"
       - ".github/workflows/decompile.yml"
+      - "tools/**"
 
 jobs:
   prepare:
@@ -91,3 +92,60 @@ jobs:
             build/apktool
             build/inventory.txt
           compression-level: 1
+
+
+  build-mod:
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Obtain APK
+        run: |
+          if [ -f original.apk ]; then
+            echo "Using uploaded original.apk"
+          else
+            curl -L --fail --retry 4 -A "Mozilla/5.0" \
+              -o original.apk \
+              "https://d.apkpure.com/b/APK/com.rene.gladiatormanager?version=3.16.1"
+          fi
+          ls -lh original.apk
+          sha256sum original.apk
+
+      - name: Install Android build/decode tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip zip python3 apktool
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "build-tools;35.0.0"
+          echo "$ANDROID_HOME/build-tools/35.0.0" >> "$GITHUB_PATH"
+
+      - name: Decode APK for patching
+        run: apktool d -f -o build/mod-apktool original.apk
+
+      - name: Apply offline editor patch
+        run: python3 tools/patch_gladiator.py build/mod-apktool
+
+      - name: Build and align
+        run: |
+          apktool b build/mod-apktool -o build/gladiator-mod-unsigned.apk
+          zipalign -f 4 build/gladiator-mod-unsigned.apk build/gladiator-mod-aligned.apk
+
+      - name: Sign and verify
+        run: |
+          keytool -genkeypair -v -keystore build/mod.keystore \
+            -storepass changeit -keypass changeit \
+            -alias gladiator-mod -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Gladiator Manager Offline Mod"
+          apksigner sign --ks build/mod.keystore --ks-pass pass:changeit \
+            --key-pass changeit --out build/gladiator-mod.apk build/gladiator-mod-aligned.apk
+          apksigner verify --verbose --print-certs build/gladiator-mod.apk
+
+      - name: Upload mod APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: gladiator-manager-offline-mod
+          path: build/gladiator-mod.apk
+          compression-level: 0
