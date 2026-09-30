@@ -19,9 +19,11 @@ jobs:
         run: |
           if [ -f original.apk ]; then
             echo "Using original.apk"
-          else
-            test -d parts
+          elif [ -d parts ]; then
             cat parts/part-* > original.apk
+          else
+            curl -L --fail --retry 4 -A "Mozilla/5.0" -o original.apk \
+              "https://d.apkpure.com/b/APK/com.rene.gladiatormanager?version=3.16.1"
           fi
           echo "APK size:"
           ls -lh original.apk
