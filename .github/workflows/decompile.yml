@@ -4,23 +4,56 @@ on:
   push:
     paths:
       - "original.apk"
+      - "parts/**"
       - ".github/workflows/decompile.yml"
 
 jobs:
-  decompile:
+  prepare:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - name: Reassemble APK when uploaded as GitHub-web chunks
+        run: |
+          if [ -f original.apk ]; then
+            echo "Using original.apk"
+          else
+            test -d parts
+            cat parts/part-* > original.apk
+          fi
+          echo "APK size:"
+          ls -lh original.apk
+          echo "APK SHA256:"
+          sha256sum original.apk
+
+      - name: Upload reconstructed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: original-apk
+          path: original.apk
+          compression-level: 0
+
+  decompile:
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reassemble APK
+        run: |
+          if [ -f original.apk ]; then
+            echo "Using original.apk"
+          else
+            cat parts/part-* > original.apk
+          fi
 
       - name: Install tools
         run: |
           sudo apt-get update
           sudo apt-get install -y unzip zip aapt apktool
-          curl -L --fail --retry 3             -o /tmp/jadx.zip             https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip
+          curl -L --fail --retry 3 -o /tmp/jadx.zip             https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip
           sudo unzip -q /tmp/jadx.zip -d /opt/jadx
           sudo chmod +x /opt/jadx/bin/jadx
 
@@ -34,20 +67,19 @@ jobs:
           mkdir -p build/apktool
           apktool d -f -o build/apktool original.apk
 
-      - name: Inventory important classes and strings
+      - name: Inventory relevant code
         run: |
           {
             echo "=== Manifest ==="
-            sed -n '1,220p' build/apktool/AndroidManifest.xml || true
+            sed -n '1,260p' build/apktool/AndroidManifest.xml || true
             echo
-            echo "=== Interesting Gladiator classes ==="
-            find build/jadx/sources -type f 2>/dev/null \
-              | grep -Ei 'GladiatorEditorActivity|GladiatorEquipmentFragment|TraitFactory|WeaponSelectionFactory|Inventory|Equipment' \
-              | sort || true
+            echo "=== Interesting classes ==="
+            find build/jadx/sources -type f 2>/dev/null |
+              grep -Ei 'GladiatorEditorActivity|GladiatorEquipmentFragment|TraitFactory|WeaponSelectionFactory|Inventory|Equipment' |
+              sort || true
             echo
-            echo "=== Interesting source references ==="
-            grep -RniE 'GladiatorEditorActivity|addTraitWithoutStats|removeTrait|addTrait\(|TraitFactory|WeaponSelectionFactory|GladiatorEquipmentFragment|save' \
-              build/jadx/sources 2>/dev/null | head -n 400 || true
+            echo "=== Interesting references ==="
+            grep -RniE 'GladiatorEditorActivity|addTraitWithoutStats|removeTrait|addTrait\(|TraitFactory|WeaponSelectionFactory|GladiatorEquipmentFragment|save'               build/jadx/sources 2>/dev/null | head -n 1000 || true
           } > build/inventory.txt
 
       - name: Upload decompilation
